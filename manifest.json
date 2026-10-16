@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LMS 강의 원클릭 다운로더",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "LearningX 계열 LMS 강의 영상을 자동 감지해 클릭 한 번으로 다운로드 (학교 무관, 연속 클릭 대기열)",
   "action": {
     "default_title": "강의 다운로드",

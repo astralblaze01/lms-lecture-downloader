@@ -158,18 +158,24 @@ async function init() {
   showMsg('강의 정보를 가져오는 중...');
 
   // 1) LearningX: 제목 있는 강의
-  for (const x of lx) {
+  //    강의 정보는 동시에 요청하고, 화면에는 원래 순서대로 표시
+  const metas = await Promise.all(lx.map(async (x) => {
     try {
       const r = await send({ action: 'getMetadata', origin: x.origin, id: x.id });
       if (r.error) throw new Error(r.error);
-      const m = parseMetadata(r.xml);
-      if (lectures.some((l) => pathOf(l.url) === pathOf(m.url))) continue;
-      const lec = { kind: 'lx', ...m, referer: `${x.origin}/`, filename: `${dir}/${safeName(m.title)}.${m.ext}` };
-      lectures.push(lec);
-      render(lec);
+      return { x, m: parseMetadata(r.xml) };
     } catch (e) {
       console.warn('LearningX metadata failed', x, e);
+      return null;
     }
+  }));
+  for (const item of metas) {
+    if (!item) continue;
+    const { x, m } = item;
+    if (lectures.some((l) => pathOf(l.url) === pathOf(m.url))) continue;
+    const lec = { kind: 'lx', ...m, referer: `${x.origin}/`, filename: `${dir}/${safeName(m.title)}.${m.ext}` };
+    lectures.push(lec);
+    render(lec);
   }
 
   // 2) 스니핑된 영상: LearningX로 이미 잡힌 것은 제외
@@ -206,7 +212,13 @@ async function init() {
     await onClick(lectures[0]);
   }
 
-  setInterval(refresh, 1000);
+  // 진행 중인 게 있을 때는 1초마다, 없을 때는 3초마다 상태 갱신
+  const tick = async () => {
+    await refresh();
+    const busy = lectures.some((l) => ['queued', 'downloading', 'retrying', 'saving'].includes(l.state));
+    setTimeout(tick, busy ? 1000 : 3000);
+  };
+  setTimeout(tick, 1000);
 }
 
 init().catch((e) => showMsg(`오류: ${e.message}`));

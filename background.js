@@ -54,12 +54,17 @@ function forgetTab(tabId) {
 }
 chrome.tabs.onRemoved.addListener(forgetTab);
 
-// 1) LearningX 플레이어 (/em/<ID>)
-//    탭 초기화도 여기서: 최상위 페이지 이동(main_frame)은 그 페이지의 하위 요청보다 항상 먼저 오므로 순서가 보장됨
+// 최상위 페이지 이동(main_frame)이 오면 그 탭의 감지 목록 초기화
+// (그 페이지의 하위 요청보다 항상 먼저 오므로 순서가 보장됨)
+chrome.webRequest.onBeforeRequest.addListener(
+  (d) => { if (d.tabId >= 0) forgetTab(d.tabId); },
+  { urls: ['<all_urls>'], types: ['main_frame'] }
+);
+
+// 1) LearningX 플레이어 (/em/<ID>) — URL 필터로 /em/ 경로만 감시
 chrome.webRequest.onBeforeRequest.addListener(
   (d) => {
     if (d.tabId < 0) return;
-    if (d.type === 'main_frame') forgetTab(d.tabId);
     const m = d.url.match(LX_EM);
     if (!m) return;
     const origin = new URL(d.url).origin;
@@ -70,58 +75,63 @@ chrome.webRequest.onBeforeRequest.addListener(
       return true;
     });
   },
-  { urls: ['<all_urls>'], types: ['main_frame', 'sub_frame', 'xmlhttprequest', 'other'] }
+  { urls: ['*://*/em/*'], types: ['main_frame', 'sub_frame', 'xmlhttprequest', 'other'] }
 );
 
 // 2) 영상 스니핑: 요청 헤더에서 Referer 확보 → 응답 헤더에서 영상인지/크기 확인
+//    Referer를 읽으려면 'extraHeaders'가 필요한데, 이건 해당 요청을 느린 경로로 처리하게 만듦.
+//    그래서 모든 요청이 아니라 <video> 요청(media)과 영상 확장자 URL에만 건다.
 const pendingRef = new Map(); // requestId -> referer
-const SNIFF_TYPES = ['media', 'xmlhttprequest', 'other', 'object'];
+const VIDEO_URLS = ['mp4', 'm4v', 'webm', 'mov', 'mkv', 'm3u8'].map((e) => `*://*/*.${e}*`);
+const SNIFF_FILTERS = [
+  { urls: ['<all_urls>'], types: ['media'] },
+  { urls: VIDEO_URLS, types: ['xmlhttprequest', 'other', 'object'] }
+];
 
-chrome.webRequest.onSendHeaders.addListener(
-  (d) => {
-    if (d.tabId < 0) return;
-    const p = pathOf(d.url);
-    if (HLS_EXT.test(p)) {
-      updateTab(d.tabId, (t) => { if (t.hls) return false; t.hls = true; return true; });
-      return;
+function onSendHeaders(d) {
+  if (d.tabId < 0) return;
+  const p = pathOf(d.url);
+  if (HLS_EXT.test(p)) {
+    updateTab(d.tabId, (t) => { if (t.hls) return false; t.hls = true; return true; });
+    return;
+  }
+  if (d.type !== 'media' && !MEDIA_EXT.test(p)) return;
+  const ref = d.requestHeaders?.find((h) => h.name.toLowerCase() === 'referer')?.value || '';
+  pendingRef.set(d.requestId, ref);
+  if (pendingRef.size > 500) pendingRef.delete(pendingRef.keys().next().value);
+}
+
+function onHeadersReceived(d) {
+  if (!pendingRef.has(d.requestId)) return;
+  const referer = pendingRef.get(d.requestId);
+  pendingRef.delete(d.requestId);
+  if (d.statusCode >= 400) return;
+  const h = (n) => d.responseHeaders?.find((x) => x.name.toLowerCase() === n)?.value || '';
+  const ctype = h('content-type').toLowerCase();
+  const p = pathOf(d.url);
+  if (ctype.includes('mpegurl')) return;
+  const isVideo = ctype.startsWith('video/') || (MEDIA_EXT.test(p) && !ctype.startsWith('text/'));
+  if (!isVideo) return;
+  const cr = h('content-range').match(/\/(\d+)\s*$/);
+  const size = cr ? parseInt(cr[1], 10) : parseInt(h('content-length') || '0', 10) || null;
+  if (size && size < MIN_MEDIA_BYTES) return;
+  updateTab(d.tabId, (t) => {
+    const ex = t.media.find((x) => pathOf(x.url) === p);
+    if (ex) {
+      if (size && !ex.size) { ex.size = size; return true; }
+      return false;
     }
-    if (d.type !== 'media' && !MEDIA_EXT.test(p)) return;
-    const ref = d.requestHeaders?.find((h) => h.name.toLowerCase() === 'referer')?.value || '';
-    pendingRef.set(d.requestId, ref);
-    if (pendingRef.size > 500) pendingRef.delete(pendingRef.keys().next().value);
-  },
-  { urls: ['<all_urls>'], types: SNIFF_TYPES },
-  ['requestHeaders', 'extraHeaders']
-);
+    t.media.push({ url: d.url, referer, size, ctype });
+    return true;
+  });
+}
 
-chrome.webRequest.onHeadersReceived.addListener(
-  (d) => {
-    if (!pendingRef.has(d.requestId)) return;
-    const referer = pendingRef.get(d.requestId);
-    pendingRef.delete(d.requestId);
-    if (d.statusCode >= 400) return;
-    const h = (n) => d.responseHeaders?.find((x) => x.name.toLowerCase() === n)?.value || '';
-    const ctype = h('content-type').toLowerCase();
-    const p = pathOf(d.url);
-    if (ctype.includes('mpegurl')) return;
-    const isVideo = ctype.startsWith('video/') || (MEDIA_EXT.test(p) && !ctype.startsWith('text/'));
-    if (!isVideo) return;
-    const cr = h('content-range').match(/\/(\d+)\s*$/);
-    const size = cr ? parseInt(cr[1], 10) : parseInt(h('content-length') || '0', 10) || null;
-    if (size && size < MIN_MEDIA_BYTES) return;
-    updateTab(d.tabId, (t) => {
-      const ex = t.media.find((x) => pathOf(x.url) === p);
-      if (ex) {
-        if (size && !ex.size) { ex.size = size; return true; }
-        return false;
-      }
-      t.media.push({ url: d.url, referer, size, ctype });
-      return true;
-    });
-  },
-  { urls: ['<all_urls>'], types: SNIFF_TYPES },
-  ['responseHeaders', 'extraHeaders']
-);
+// 같은 함수를 두 번 addListener하면 크롬이 두 번째를 무시하므로, 필터마다 새 함수로 감싼다
+for (const f of SNIFF_FILTERS) {
+  chrome.webRequest.onSendHeaders.addListener((d) => onSendHeaders(d), f, ['requestHeaders', 'extraHeaders']);
+  chrome.webRequest.onHeadersReceived.addListener((d) => onHeadersReceived(d), f, ['responseHeaders']);
+  chrome.webRequest.onErrorOccurred.addListener((d) => pendingRef.delete(d.requestId), f);
+}
 
 // ---------- 호스트별 Referer 규칙 (확장 자신의 요청에만 적용) ----------
 // 락 안에서 호출해도 되도록 내부에서 withLock을 쓰지 않음
@@ -333,11 +343,17 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       }
       case 'getMetadata': {
         // LearningX content.php (같은 호스트) → 강의 제목·영상 주소 XML
+        // 한 번 받은 정보는 세션 동안 캐시 (팝업을 다시 열 때 재요청 안 함)
+        const key = `meta:${req.origin}|${req.id}`;
+        const cached = (await chrome.storage.session.get(key))[key];
+        if (cached) return { xml: cached };
         const url = `${req.origin}/viewer/ssplayer/uniplayer_support/content.php?content_id=${encodeURIComponent(req.id)}`;
         await setReferer(url, `${req.origin}/`);
         const res = await fetch(url, { credentials: 'include' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return { xml: await res.text() };
+        const xml = await res.text();
+        chrome.storage.session.set({ [key]: xml }).catch(() => {});
+        return { xml };
       }
       case 'enqueue':
         return { added: await enqueue(req.items || []) };
