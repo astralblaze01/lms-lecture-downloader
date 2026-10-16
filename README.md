@@ -103,6 +103,5 @@
 
 ## 크레딧
 
-- 경북대 전용 v2: [astralblaze01/knu-learningx-downloader](https://github.com/astralblaze01/knu-learningx-downloader)
 - 원본: [7829hw/learningx-downloader](https://github.com/7829hw/learningx-downloader) (경북대 LMS용)
 - 그 원본: [zinirun](https://github.com/zinirun) (경희대 LearningX용, MIT License)
