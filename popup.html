@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <img src="icon-48.png" alt="" />
+      <span>LMS 강의 다운로더</span>
+      <span id="site"></span>
+    </header>
+
+    <div id="toolbar" hidden>
+      <button id="allBtn">전체 다운로드</button>
+      <button id="cancelBtn" class="ghost" title="진행 중·대기 중인 다운로드 모두 취소">전체 취소</button>
+    </div>
+
+    <div id="msg"></div>
+    <ul id="list"></ul>
+
+    <footer>
+      <label><input type="checkbox" id="autoOne" /> 영상이 1개면 열자마자 받기</label>
+      <label>동시 다운로드
+        <select id="parallel">
+          <option value="1">1개</option>
+          <option value="2">2개</option>
+          <option value="3">3개</option>
+        </select>
+      </label>
+      <div class="hint">제목을 누를 때마다 대기열에 추가돼요. 저장 위치: 다운로드/LMS/<span id="dir">학교</span></div>
+    </footer>
+    <script src="popup.js"></script>
+  </body>
+</html>
