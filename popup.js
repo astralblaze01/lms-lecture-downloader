@@ -82,6 +82,20 @@ async function onClick(lec) {
   refresh();
 }
 
+function fmtSpeed(bps) {
+  const mb = bps / 1048576;
+  return `${mb >= 10 ? mb.toFixed(0) : mb.toFixed(1)}MB/s`;
+}
+
+// 크롬은 서버(호스트) 하나에 HTTP/1.1 연결을 6개까지만 엶
+function updateConnHint() {
+  const p = parseInt($('#parallel').value, 10);
+  const c = parseInt($('#connections').value, 10);
+  const hint = $('#connHint');
+  hint.hidden = p * c <= 6;
+  hint.textContent = `동시 ${p}개 × 연결 ${c}개 = ${p * c}개라 크롬 한도(6개)를 넘어요. 넘는 연결은 대기하므로 더 빨라지지 않아요.`;
+}
+
 function fmtMB(n) {
   return n ? `${(n / 1048576).toFixed(n > 104857600 ? 0 : 1)}MB` : '';
 }
@@ -98,7 +112,11 @@ async function refresh() {
     let t = '';
     switch (s.state) {
       case 'queued': t = `대기 중 (${s.pos}번째)`; break;
-      case 'downloading': t = s.pct != null ? `다운로드 중 ${s.pct}%` : `다운로드 중 ${fmtMB(s.received)}`; break;
+      case 'downloading': {
+        t = s.pct != null ? `다운로드 중 ${s.pct}%` : `다운로드 중 ${fmtMB(s.received)}`;
+        if (s.speed > 0) t += ` · ${fmtSpeed(s.speed)}`;
+        break;
+      }
       case 'retrying': t = `연결 끊김 → 이어받는 중 (${s.retries}회)`; break;
       case 'saving': t = '파일로 저장 중...'; break;
       case 'complete': t = '완료 · 클릭하면 폴더 열기'; break;
@@ -119,11 +137,14 @@ async function getTargetTab() {
 }
 
 async function init() {
-  const { autoOne = true, parallel = 1 } = await chrome.storage.local.get(['autoOne', 'parallel']);
+  const { autoOne = true, parallel = 1, connections = 6 } = await chrome.storage.local.get(['autoOne', 'parallel', 'connections']);
   $('#autoOne').checked = autoOne;
   $('#parallel').value = String(parallel);
+  $('#connections').value = String(connections);
+  updateConnHint();
   $('#autoOne').addEventListener('change', (e) => chrome.storage.local.set({ autoOne: e.target.checked }));
-  $('#parallel').addEventListener('change', (e) => send({ action: 'setParallel', value: parseInt(e.target.value, 10) }));
+  $('#parallel').addEventListener('change', (e) => { updateConnHint(); send({ action: 'setParallel', value: parseInt(e.target.value, 10) }); });
+  $('#connections').addEventListener('change', (e) => { updateConnHint(); send({ action: 'setConnections', value: parseInt(e.target.value, 10) }); });
   $('#allBtn').addEventListener('click', async () => {
     const todo = lectures.filter((l) => !['queued', 'downloading', 'retrying', 'saving', 'complete'].includes(l.state));
     if (todo.length) await send({ action: 'enqueue', items: todo.map(pick) });

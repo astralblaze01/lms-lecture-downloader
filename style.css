@@ -131,3 +131,4 @@ footer select { font: inherit; margin-left: auto; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+#connHint { color: var(--accent-dark); }

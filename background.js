@@ -7,7 +7,7 @@
 //      (HLS(.m3u8) 스트리밍은 감지만 하고 미지원 안내)
 //
 // 다운로드
-//   - offscreen 페이지가 fetch로 8MB씩 Range 요청 → 끊기면 그 조각만 재시도 → Blob → chrome.downloads로 저장
+//   - offscreen 페이지가 fetch로 8MB씩 Range 요청 (파일당 동시 연결 2~8개, 기본 6) → 끊기면 그 조각만 재시도 → Blob → chrome.downloads로 저장
 //   - Referer는 호스트별 DNR 세션 규칙으로 붙임 (tabIds: [-1] → 확장 자신의 요청에만 적용, 일반 브라우징엔 영향 없음)
 //   - 연속 클릭 → 대기열, 동시 다운로드 1~3개
 
@@ -16,6 +16,7 @@ const MEDIA_EXT = /\.(mp4|m4v|webm|mov|mkv)$/i;
 const HLS_EXT = /\.m3u8$/i;
 const MIN_MEDIA_BYTES = 1024 * 1024; // 1MB 미만(광고·효과음 등)은 무시
 const DEFAULT_PARALLEL = 1;
+const DEFAULT_CONNECTIONS = 6; // 파일 하나당 동시 연결 수 (크롬의 호스트당 HTTP/1.1 한도 6)
 
 // ---------- 직렬화 락 ----------
 let chain = Promise.resolve();
@@ -191,6 +192,11 @@ async function getParallel() {
   return Math.min(Math.max(parseInt(parallel, 10) || DEFAULT_PARALLEL, 1), 3);
 }
 
+async function getConnections() {
+  const { connections } = await chrome.storage.local.get('connections');
+  return Math.min(Math.max(parseInt(connections, 10) || DEFAULT_CONNECTIONS, 1), 8);
+}
+
 function updateTitle(n) {
   chrome.action.setTitle({ title: n ? `강의 다운로드 (진행/대기 ${n}개)` : '강의 다운로드' });
 }
@@ -209,9 +215,10 @@ function pump() {
     updateTitle(queue.length + active.length);
     if (toStart.length) {
       await ensureOffscreen();
+      const connections = await getConnections();
       for (const job of toStart) {
         await setReferer(job.url, job.referer);
-        toOffscreen({ action: 'start', job });
+        toOffscreen({ action: 'start', job: { ...job, connections } });
       }
     }
   });
@@ -308,7 +315,7 @@ async function getStatus(urls) {
       if (a.phase === 'saving') { out[url] = { state: 'saving' }; continue; }
       const p = progress[url] || {};
       const pct = p.total ? Math.floor((p.received / p.total) * 100) : null;
-      out[url] = { state: p.fails ? 'retrying' : 'downloading', pct, retries: p.fails || 0, received: p.received || 0 };
+      out[url] = { state: p.fails ? 'retrying' : 'downloading', pct, retries: p.fails || 0, received: p.received || 0, speed: p.speed || 0 };
       continue;
     }
     const qi = queue.findIndex((x) => x.url === url);
@@ -329,7 +336,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
   if (req.target === 'offscreen') return false;
 
   if (req.target === 'background') {
-    if (req.action === 'progress') progress[req.url] = { received: req.received, total: req.total, fails: req.fails };
+    if (req.action === 'progress') progress[req.url] = { received: req.received, total: req.total, fails: req.fails, speed: req.speed || 0 };
     else if (req.action === 'jobDone') onJobDone(req.url, req.blobUrl);
     else if (req.action === 'jobFailed') onJobFailed(req.url, req.error);
     return false;
@@ -367,6 +374,10 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           await chrome.storage.session.set({ queue: [], active: [] });
         });
         updateTitle(0);
+        return { ok: true };
+      case 'setConnections':
+        // 다음에 시작하는 다운로드부터 적용
+        await chrome.storage.local.set({ connections: req.value });
         return { ok: true };
       case 'setParallel':
         await chrome.storage.local.set({ parallel: req.value });

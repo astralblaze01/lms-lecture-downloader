@@ -28,6 +28,15 @@
           <option value="3">3개</option>
         </select>
       </label>
+      <label title="영상 하나를 몇 갈래로 나눠 동시에 받을지. 크롬은 서버 하나에 연결을 6개까지만 열어서, 동시 다운로드 × 연결 수가 6을 넘으면 나머지는 기다려요.">파일당 연결 수
+        <select id="connections">
+          <option value="2">2개</option>
+          <option value="4">4개</option>
+          <option value="6">6개 (권장)</option>
+          <option value="8">8개</option>
+        </select>
+      </label>
+      <div class="hint" id="connHint" hidden></div>
       <div class="hint">제목을 누를 때마다 대기열에 추가돼요. 저장 위치: 다운로드/LMS/<span id="dir">학교</span></div>
     </footer>
     <script src="popup.js"></script>
