@@ -132,3 +132,12 @@ footer select { font: inherit; margin-left: auto; }
   white-space: nowrap;
 }
 #connHint { color: var(--accent-dark); }
+
+/* 켜기/끄기 스위치 */
+.switch { position: relative; width: 34px; height: 20px; flex: none; cursor: pointer; }
+.switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+.switch .slider { position: absolute; inset: 0; background: #d1d5db; border-radius: 999px; transition: background .15s; }
+.switch .slider::before { content: ''; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; background: #fff; border-radius: 50%; transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
+.switch input:checked + .slider { background: var(--accent); }
+.switch input:checked + .slider::before { transform: translateX(14px); }
+.switch input:focus-visible + .slider { outline: 2px solid var(--accent-dark); outline-offset: 2px; }

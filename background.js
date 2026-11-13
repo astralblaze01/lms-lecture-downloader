@@ -10,6 +10,7 @@
 //   - offscreen 페이지가 fetch로 8MB씩 Range 요청 (파일당 동시 연결 2~8개, 기본 6) → 끊기면 그 조각만 재시도 → Blob → chrome.downloads로 저장
 //   - Referer는 호스트별 DNR 세션 규칙으로 붙임 (tabIds: [-1] → 확장 자신의 요청에만 적용, 일반 브라우징엔 영향 없음)
 //   - 연속 클릭 → 대기열, 동시 다운로드 1~3개
+//   - 팝업 스위치로 감지 끄기/켜기 (끄면 webRequest 리스너 제거, 배지 OFF)
 
 const LX_EM = /^https?:\/\/([^/]+)\/em\/([A-Za-z0-9]+)(?:[/?#]|$)/;
 const MEDIA_EXT = /\.(mp4|m4v|webm|mov|mkv)$/i;
@@ -63,8 +64,8 @@ chrome.webRequest.onBeforeRequest.addListener(
 );
 
 // 1) LearningX 플레이어 (/em/<ID>) — URL 필터로 /em/ 경로만 감시
-chrome.webRequest.onBeforeRequest.addListener(
-  (d) => {
+const EM_FILTER = { urls: ['*://*/em/*'], types: ['main_frame', 'sub_frame', 'xmlhttprequest', 'other'] };
+const onEmRequest = (d) => {
     if (d.tabId < 0) return;
     const m = d.url.match(LX_EM);
     if (!m) return;
@@ -75,9 +76,7 @@ chrome.webRequest.onBeforeRequest.addListener(
       t.lx.push({ origin, id, embed: d.url });
       return true;
     });
-  },
-  { urls: ['*://*/em/*'], types: ['main_frame', 'sub_frame', 'xmlhttprequest', 'other'] }
-);
+};
 
 // 2) 영상 스니핑: 요청 헤더에서 Referer 확보 → 응답 헤더에서 영상인지/크기 확인
 //    Referer를 읽으려면 'extraHeaders'가 필요한데, 이건 해당 요청을 느린 경로로 처리하게 만듦.
@@ -127,12 +126,46 @@ function onHeadersReceived(d) {
   });
 }
 
+// ---------- 켜기/끄기 ----------
+// 끄면 감지용 webRequest 리스너를 아예 떼어냄 → 일반 브라우징에 부담 0, 서비스워커도 이 요청들로 깨지 않음
+// (진행 중인 다운로드·대기열은 그대로 끝까지 진행)
 // 같은 함수를 두 번 addListener하면 크롬이 두 번째를 무시하므로, 필터마다 새 함수로 감싼다
+const detectors = [[chrome.webRequest.onBeforeRequest, onEmRequest, EM_FILTER]];
 for (const f of SNIFF_FILTERS) {
-  chrome.webRequest.onSendHeaders.addListener((d) => onSendHeaders(d), f, ['requestHeaders', 'extraHeaders']);
-  chrome.webRequest.onHeadersReceived.addListener((d) => onHeadersReceived(d), f, ['responseHeaders']);
-  chrome.webRequest.onErrorOccurred.addListener((d) => pendingRef.delete(d.requestId), f);
+  detectors.push([chrome.webRequest.onSendHeaders, (d) => onSendHeaders(d), f, ['requestHeaders', 'extraHeaders']]);
+  detectors.push([chrome.webRequest.onHeadersReceived, (d) => onHeadersReceived(d), f, ['responseHeaders']]);
+  detectors.push([chrome.webRequest.onErrorOccurred, (d) => pendingRef.delete(d.requestId), f]);
 }
+
+function setDetection(on) {
+  for (const [ev, fn, filter, extra] of detectors) {
+    if (on && !ev.hasListener(fn)) extra ? ev.addListener(fn, filter, extra) : ev.addListener(fn, filter);
+    if (!on && ev.hasListener(fn)) ev.removeListener(fn);
+  }
+}
+
+async function applyEnabled(on) {
+  setDetection(on);
+  if (on) {
+    chrome.action.setBadgeText({ text: '' });
+    return;
+  }
+  pendingRef.clear();
+  // 감지 목록과 탭별 배지 지우고 전체 배지를 OFF로
+  await withLock(async () => {
+    const { tabs = {} } = await S('tabs');
+    for (const id of Object.keys(tabs)) chrome.action.setBadgeText({ tabId: Number(id), text: '' }).catch(() => {});
+    await chrome.storage.session.set({ tabs: {} });
+  });
+  chrome.action.setBadgeBackgroundColor({ color: '#9CA3AF' });
+  chrome.action.setBadgeText({ text: 'OFF' });
+}
+
+// 서비스워커가 깨어날 때마다 리스너는 동기적으로 먼저 등록하고(MV3 규칙), 꺼져 있으면 바로 떼어냄
+setDetection(true);
+chrome.storage.local.get('enabled').then(({ enabled = true }) => { if (!enabled) applyEnabled(false); });
+// 브라우저를 새로 켰을 때도 서비스워커를 깨워서 OFF 배지를 다시 표시
+chrome.runtime.onStartup.addListener(() => {});
 
 // ---------- 호스트별 Referer 규칙 (확장 자신의 요청에만 적용) ----------
 // 락 안에서 호출해도 되도록 내부에서 withLock을 쓰지 않음
@@ -374,6 +407,10 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           await chrome.storage.session.set({ queue: [], active: [] });
         });
         updateTitle(0);
+        return { ok: true };
+      case 'setEnabled':
+        await chrome.storage.local.set({ enabled: !!req.value });
+        await applyEnabled(!!req.value);
         return { ok: true };
       case 'setConnections':
         // 다음에 시작하는 다운로드부터 적용

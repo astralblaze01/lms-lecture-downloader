@@ -145,6 +145,17 @@ async function init() {
   $('#autoOne').addEventListener('change', (e) => chrome.storage.local.set({ autoOne: e.target.checked }));
   $('#parallel').addEventListener('change', (e) => { updateConnHint(); send({ action: 'setParallel', value: parseInt(e.target.value, 10) }); });
   $('#connections').addEventListener('change', (e) => { updateConnHint(); send({ action: 'setConnections', value: parseInt(e.target.value, 10) }); });
+  const { enabled = true } = await chrome.storage.local.get('enabled');
+  $('#enabled').checked = enabled;
+  $('#enabled').addEventListener('change', async (e) => {
+    await send({ action: 'setEnabled', value: e.target.checked });
+    location.reload(); // 상태에 맞게 팝업 다시 그림
+  });
+  if (!enabled) {
+    showMsg('꺼져 있어요. 오른쪽 위 스위치를 켜면 영상 감지를 다시 시작해요.\n(켠 다음엔 강의 페이지를 새로고침 F5 후 재생)');
+    return;
+  }
+
   $('#allBtn').addEventListener('click', async () => {
     const todo = lectures.filter((l) => !['queued', 'downloading', 'retrying', 'saving', 'complete'].includes(l.state));
     if (todo.length) await send({ action: 'enqueue', items: todo.map(pick) });
